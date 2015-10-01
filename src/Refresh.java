@@ -1,4 +1,5 @@
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -23,20 +24,34 @@ import weka.core.Attribute;
 import weka.core.DenseInstance;
 import weka.core.Instance;
 import weka.core.Instances;
+import weka.core.converters.ArffSaver;
 
 
 public class Refresh {
 	private List<String> pickedOrNot = Arrays.asList("Picked","Not Picked");
 	private HashMap<String, Attribute> heroMap;
-	private String steamKey = "";
-	private final boolean onlyPro = false;
-	String matchIds = "matchIDs";
-	String allMatchIds = "allMatchIDs";
+	private String steamKey;
+	private final boolean refreshBoth = true;
+	private boolean onlyPro = true;
+	private int timeout = 30*1000; //first number is seconds
+	private String proMatchIds = "proMatchIds";
+	private String allMatchIds = "allMatchIds";
 			
 	public Refresh(){
+		try(BufferedReader br = new BufferedReader(new FileReader("SteamKey.txt"))) {
+	    	steamKey = br.readLine();
+	    } catch (Exception e) {
+			e.printStackTrace();
+			return;
+		}		
 		try {
-			//refreshIDs();
-			//createArff();
+			refreshIds();
+			createArff();
+			if(refreshBoth){
+				onlyPro = !onlyPro;
+				refreshIds();
+				createArff();
+			}
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -45,9 +60,7 @@ public class Refresh {
 	private final String USER_AGENT = "Mozilla/5.0";
 	
 	private JSONObject sendGet(String url) throws Exception {
-				 
-		//String url = "https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/V001/?key=3384EB4CA79A446402EBDE8A0C0A3D88&match_id=1470411671";
- 
+				  
 		URL obj = new URL(url);
 		HttpURLConnection con = (HttpURLConnection) obj.openConnection();
  
@@ -68,23 +81,24 @@ public class Refresh {
 		while ((inputStr = streamReader.readLine()) != null)
 		    responseStrBuilder.append(inputStr);
 		
- 
 		//print result
 		JSONObject json = new JSONObject(responseStrBuilder.toString());
 		return json; 
 	}
 	
 	private void createArff() throws Exception{
-		ArrayList<String> matchIDs = readIds();
+		ArrayList<String> matchIds = readIds();
+		if(matchIds == null)
+			System.out.println("JK, got issues");
 		ArrayList<Attribute> picks = fillPicksAtts();
 				
 		Instances data = new Instances("Team Comp", picks, picks.size());
 		
 		HashMap<Integer, String> idToHero = idToHero();
 		
-		String matchUrl = "https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/V001/?key=3384EB4CA79A446402EBDE8A0C0A3D88&match_id=";
+		String matchUrl = "https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/V001/?key=" + steamKey + "&match_id=";
 		
-		for(String id : readIds()){
+		for(String id : matchIds){
 			Instance matchResult = new DenseInstance(picks.size());
 			matchResult.setDataset(data);
 			fillInstance(matchResult);
@@ -114,9 +128,12 @@ public class Refresh {
 			matchResult.setValue(heroMap.get("Victory"), (boolean)match.get("radiant_win") ? "Radiant" : "Dire");
 			data.add(matchResult);
 		}
-
-		System.out.println(data);
-		
+		ArffSaver saver = new ArffSaver();
+	    saver.setInstances(data);
+	    saver.setFile(new File("./data/" + (onlyPro ? proMatchIds : allMatchIds) + ".arff"));
+	    saver.writeBatch();
+	    System.out.println(onlyPro ? "Arff file created for pro matches" : "Arff file created for all matches");
+		//System.out.println(data);
 	}
 	
 	private void fillInstance(Instance matchResult){
@@ -127,7 +144,7 @@ public class Refresh {
 	}
 	
 	private HashMap<Integer, String> idToHero() throws Exception{
-		JSONArray allHeroes = (JSONArray)((JSONObject)sendGet("https://api.steampowered.com/IEconDOTA2_570/GetHeroes/v0001/?key=3384EB4CA79A446402EBDE8A0C0A3D88&language=en_us").get("result")).get("heroes");
+		JSONArray allHeroes = (JSONArray)((JSONObject)sendGet("https://api.steampowered.com/IEconDOTA2_570/GetHeroes/v0001/?key=" + steamKey + "&language=en_us").get("result")).get("heroes");
 		
 		HashMap<Integer, String> idToHero = new HashMap<Integer, String>();
 		
@@ -136,6 +153,85 @@ public class Refresh {
 			idToHero.put((Integer) hero.get("id"), ((String) hero.get("localized_name")).replaceAll("\\s",""));
 		}
 		return idToHero;
+	}
+
+	private ArrayList<String> readIds(){
+		ArrayList<String> matchIds = new ArrayList<String>();
+		String matchIdSrc = "./data/" + (onlyPro ? proMatchIds : allMatchIds)  + ".txt";
+		try{
+			BufferedReader br = new BufferedReader(new FileReader(matchIdSrc));
+	    	String line = br.readLine();
+	        while (line != null) {
+	    		String[] subparts = line.split(" ");
+	        	matchIds.add(subparts[0]);
+	            line = br.readLine();
+	        }
+	    } catch (Exception e) {
+			//e.printStackTrace();
+	    	System.out.println("First time creating Ids");
+			return null;
+		}
+		return matchIds;
+	}
+	
+	private void refreshIds() throws IOException{		
+		ArrayList<String> matchIds = new ArrayList<String>();
+		ArrayList<String> prevMatchIds = new ArrayList<String>();
+		Document matchPage = null;
+		String matchURL = "http://www.dotabuff.com/esports/matches";
+		Elements matches;
+		
+		//get IDs
+		try{
+			matchPage = Jsoup.connect(matchURL).userAgent("Chrome").timeout(timeout).get();
+		}catch(Exception e){
+			
+		}
+				
+		matches = matchPage.select("tr");
+		for(int i = 1; i < matches.size(); i++){
+			String matchInfo = matches.get(i).text();
+			if(!matchInfo.contains("Amateur") || !onlyPro){
+				String id = matchInfo.substring(0, 10) + " " + matchInfo.substring(10, 21);
+				//matchPage = Jsoup.connect("http://www.dotabuff.com/matches/" + id.split(" ")[0]).userAgent("Chrome").timeout(timeout).get();
+				//if(matchPage.select("dd").get(1).text().contains("Captains Mode")){
+				matchIds.add(id);
+				//}
+			}
+		}
+		for(int page = 2; page < 51; page++){
+			try{
+				matchPage = Jsoup.connect(matchURL + "?page=" + page).timeout(timeout).userAgent("Chrome").get();
+				matches = matchPage.select("tr");
+				for(int i = 1; i < matches.size(); i++){
+					String matchInfo = matches.get(i).text();
+					if(!matchInfo.contains("Amateur") || !onlyPro){
+						String id = matchInfo.substring(0, 10) + " " + matchInfo.substring(10, 21);
+						//matchPage = Jsoup.connect("http://www.dotabuff.com/matches/" + id.split(" ")[0]).userAgent("Chrome").timeout(timeout).get();
+						//if(matchPage.select("dd").get(1).text().contains("Captains Mode")){
+						matchIds.add(id);
+						//}
+					}
+				}
+			}catch(HttpStatusException e){
+				System.out.println("Page: " + page);
+				page--;
+				//e.printStackTrace();
+			}
+		}
+		
+		prevMatchIds = readIds();
+		//System.out.println(matchIds.size());
+		//save IDs
+		PrintWriter out = null;
+		String matchIdDest = "./data/" + (onlyPro ? proMatchIds : allMatchIds)  + ".txt";
+		out = new PrintWriter(new FileWriter(matchIdDest, true));
+		for(int i = matchIds.size()-1; i >= 0; i--){
+    		String[] subparts = matchIds.get(i).split(" ");
+			if(prevMatchIds != null && !prevMatchIds.contains(subparts[0]))
+				out.println(matchIds.get(i));
+		}
+		out.close();
 	}
 	
 	private ArrayList<Attribute> fillPicksAtts(){
@@ -821,75 +917,6 @@ public class Refresh {
 		atts.add(att);
 		
 		return atts;
-	}
-	
-	private ArrayList<String> readIds(){
-		ArrayList<String> matchIDs = new ArrayList<String>();
-		String matchIdSrc = (onlyPro ? matchIds : allMatchIds)  + ".txt";
-		try(BufferedReader br = new BufferedReader(new FileReader(matchIdSrc))) {
-	    	String line = br.readLine();
-	        while (line != null) {
-	    		String[] subparts = line.split(" ");
-	        	matchIDs.add(subparts[0]);
-	            line = br.readLine();
-	        }
-	    } catch (Exception e) {
-			e.printStackTrace();
-		}
-		return matchIDs;
-	}
-	
-	private void refreshIDs() throws IOException{		
-		ArrayList<String> matchIDs = new ArrayList<String>();
-		ArrayList<String> prevMatchIDs = new ArrayList<String>();
-		Document matchPage = null;
-		String matchURL = "http://www.dotabuff.com/esports/matches";
-		Elements matches;
-		
-		//get IDs
-		matchPage = Jsoup.connect(matchURL).userAgent("Chrome").timeout(10*1000).get();
-		matches = matchPage.select("tr");
-		for(int i = 1; i < matches.size(); i++){
-			String matchInfo = matches.get(i).text();
-			if(!matchInfo.contains("Amateur") || !onlyPro){
-				String id = matchInfo.substring(0, 10) + " " + matchInfo.substring(10, 21);
-				//matchPage = Jsoup.connect("http://www.dotabuff.com/matches/" + id.split(" ")[0]).userAgent("Chrome").timeout(10*1000).get();
-				//if(matchPage.select("dd").get(1).text().contains("Captains Mode")){
-					matchIDs.add(id);
-				//}
-			}
-		}
-		for(int page = 2; page < 51; page++){
-			try{
-				matchPage = Jsoup.connect(matchURL + "?page=" + page).timeout(10*1000).userAgent("Chrome").get();
-				matches = matchPage.select("tr");
-				for(int i = 1; i < matches.size(); i++){
-					String matchInfo = matches.get(i).text();
-					if(!matchInfo.contains("Amateur") || !onlyPro){
-						String id = matchInfo.substring(0, 10) + " " + matchInfo.substring(10, 21);
-						//matchPage = Jsoup.connect("http://www.dotabuff.com/matches/" + id.split(" ")[0]).userAgent("Chrome").timeout(10*1000).get();
-						//if(matchPage.select("dd").get(1).text().contains("Captains Mode")){
-							matchIDs.add(id);
-						//}
-					}
-				}
-			}catch(HttpStatusException e){
-				e.printStackTrace();
-				break;
-			}
-		}
-		
-		prevMatchIDs = readIds();
-		System.out.println(matchIDs.size());
-		//save IDs
-		PrintWriter out = null;
-		out = onlyPro ? new PrintWriter(new FileWriter(matchIds + ".txt", true)) : new PrintWriter(new FileWriter(allMatchIds + ".txt", true));
-		for(int i = matchIDs.size()-1; i >= 0; i--){
-    		String[] subparts = matchIDs.get(i).split(" ");
-			if(!prevMatchIDs.contains(subparts[0]))
-				out.println(matchIDs.get(i));
-		}
-		out.close();
 	}
 
 	public static void main(String [] args){
