@@ -1,5 +1,6 @@
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -20,6 +21,7 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.select.Elements;
 
+import weka.attributeSelection.PrincipalComponents;
 import weka.core.Attribute;
 import weka.core.DenseInstance;
 import weka.core.Instance;
@@ -36,28 +38,32 @@ public class Refresh {
 	private int timeout = 30*1000; //first number is seconds
 	private String proMatchIds = "proMatchIds";
 	private String allMatchIds = "allMatchIds";
+	private final String USER_AGENT = "Mozilla/5.0";
 			
 	public Refresh(){
-		try(BufferedReader br = new BufferedReader(new FileReader("SteamKey.txt"))) {
-	    	steamKey = br.readLine();
-	    } catch (Exception e) {
+		try {
+			steamKey = readDataFile("SteamKey.txt").readLine();
+		} catch (IOException e) {
+			System.out.println("No Steam Key");
 			e.printStackTrace();
-			return;
-		}		
+		}
+	}
+	
+	private void refreshFiles(){
 		try {
 			refreshIds();
 			createArff();
+			createModel();
 			if(refreshBoth){
 				onlyPro = !onlyPro;
 				refreshIds();
 				createArff();
+				createModel();
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
 	}
-	
-	private final String USER_AGENT = "Mozilla/5.0";
 	
 	private JSONObject sendGet(String url) throws Exception {
 				  
@@ -134,6 +140,16 @@ public class Refresh {
 	    saver.writeBatch();
 	    System.out.println(onlyPro ? "Arff file created for pro matches" : "Arff file created for all matches");
 		//System.out.println(data);
+	}
+	
+	private void createModel() throws Exception{
+		Instances data = new Instances(readDataFile("./data/" + (onlyPro ? proMatchIds : allMatchIds)  + ".arff"));
+    	data.setClassIndex(data.numAttributes() - 1);
+
+    	PrincipalComponents pca = new PrincipalComponents();
+    	pca.buildEvaluator(data);
+    	weka.core.SerializationHelper.write("./data/" + (onlyPro ? proMatchIds : allMatchIds)  + "_PCA.model", pca);
+    	System.out.println(onlyPro ? "PCA Model created for pro matches" : "PCA Model created for all matches");
 	}
 	
 	private void fillInstance(Instance matchResult){
@@ -918,8 +934,19 @@ public class Refresh {
 		
 		return atts;
 	}
+	
+	private BufferedReader readDataFile(String filename) {
+        BufferedReader inputReader = null;
+        try {
+            inputReader = new BufferedReader(new FileReader(filename));
+        } catch (FileNotFoundException ex) {
+            System.err.println("File not found: " + filename);
+        }
+        return inputReader;
+    }
 
 	public static void main(String [] args){
 		Refresh re = new Refresh();
+		re.refreshFiles();
 	}
 }
