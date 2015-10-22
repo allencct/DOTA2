@@ -34,6 +34,7 @@ public class Refresh {
 	private HashMap<String, Attribute> heroMap;
 	private String steamKey;
 	private final boolean refreshBoth = true;
+	private final boolean onlyIds = true;
 	private boolean onlyPro = true;
 	private int timeout = 30*1000; //first number is seconds
 	private String proMatchIds = "proMatchIds";
@@ -52,13 +53,17 @@ public class Refresh {
 	private void refreshFiles(){
 		try {
 			refreshIds();
-			createArff();
-			createModel();
+			if(!onlyIds){
+				createArff();
+				createModel();
+			}
 			if(refreshBoth){
 				onlyPro = !onlyPro;
 				refreshIds();
-				createArff();
-				createModel();
+				if(!onlyIds){
+					createArff();
+					createModel();
+				}
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -248,6 +253,8 @@ public class Refresh {
 				out.println(matchIds.get(i));
 		}
 		out.close();
+		
+	    System.out.println(onlyPro ? "Ids refreshed for pro matches" : "Ids refreshed for all matches");
 	}
 	
 	private ArrayList<Attribute> fillPicksAtts(){
